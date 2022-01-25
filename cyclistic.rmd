@@ -1,0 +1,255 @@
+---
+title: "cyclistic"
+author: "ian.macdougall"
+date: "10/29/2021"
+output:
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+###load libraries
+```{r}
+library(data.table)
+setDTthreads(4)
+library(ggplot2)
+library(ggridges)
+```
+
+###import data
+```{r}
+t.1 <- fread("~/R/capstone/cyclistic/cyclistic.data/trips.2019.q2.csv")
+t.2 <- fread("~/R/capstone/cyclistic/cyclistic.data/trips.2019.q3.csv")
+t.3 <- fread("~/R/capstone/cyclistic/cyclistic.data/trips.2019.q4.csv")
+t.4 <- fread("~/R/capstone/cyclistic/cyclistic.data/trips.2020.q1.csv")
+
+```
+
+###convert to data.table
+```{r}
+t.1 <- as.data.table(t.1)
+t.2 <- as.data.table(t.2)
+t.3 <- as.data.table(t.3)
+t.4 <- as.data.table(t.4)
+
+is.data.table(t.1)
+is.data.table(t.2)
+
+```
+
+###  clean data and ready to merge
+  remove gender and birth year (mostly NAs)
+  goal colnames = 
+  c("trip.id", "start", "end", "seconds", "start.id", "start.name", "end.id", "end.name", "user.type")
+  
+###t.1  
+```{r}
+t.1[, `Member Gender` := NULL]
+t.1[, `05 - Member Details Member Birthday Year` := NULL]
+t.1[, '01 - Rental Details Bike ID' := NULL]
+
+colnames(t.1) <- c("trip.id", "start", "end", "seconds", "start.id", "start.name", "end.id", "end.name", "user.type")
+
+```
+
+###t.2
+```{r}
+t.2[, 'gender' := NULL]
+t.2[, 'birthyear' := NULL]
+t.2[, 'bikeid' := NULL]
+
+colnames(t.2) <- c("trip.id", "start", "end", "seconds", "start.id", "start.name", "end.id", "end.name", "user.type")
+
+```
+
+###t.3
+```{r}
+t.3[, 'gender' := NULL]
+t.3[, 'birthyear' := NULL]
+t.3[, 'bikeid' := NULL]
+
+colnames(t.3) <- c("trip.id", "start", "end", "seconds", "start.id", "start.name", "end.id", "end.name", "user.type")
+
+```
+
+###t.4   (super messy)
+```{r}
+t.4[, 'start_lat' := NULL]
+t.4[, 'start_lng' := NULL]
+t.4[, 'end_lat' := NULL]
+t.4[, 'end_lng' := NULL]
+t.4[, 'rideable_type' := NULL]
+
+#add column 'seconds
+time <- c(t.4$ended_at - t.4$started_at)
+t.4[, 'seconds' := time]
+t.4 <- t.4[, seconds := as.character(seconds)]
+rm(time)
+
+#reorganize column order
+setcolorder(t.4, c(1, 2, 3, 9, 5, 4, 7, 6, 8))
+
+#rename columns
+colnames(t.4) <- c("trip.id", "start", "end", "seconds", "start.id", "start.name", "end.id", "end.name", "user.type")
+
+```
+
+###check for NA's
+```{r}
+any(is.na(t.1))
+any(is.na(t.2))
+any(is.na(t.3))
+any(is.na(t.4))  #true! find it!
+
+sum(is.na(t.4))  # 1 NA somewhere
+## row 414427
+
+#delete NA row
+t.4 <- na.omit(t.4)
+
+```
+
+###merge into a single DT
+```{r}
+l <- list(t.1, t.2, t.3, t.4)
+trips <- rbindlist(l)
+#rm(t.1, t.2, t.3, t.4)
+
+```
+
+###more cleaning
+  seconds is character, convert to numeric (factor first?)
+```{r}
+trips <- trips[ , seconds := as.factor(seconds)]
+trips <- trips[ , seconds := as.numeric(seconds)]
+```
+
+
+###user.type needs cleaning. want casual, member
+```{r}
+trips <- trips[user.type == "Customer", user.type := "casual"]
+trips <- trips[user.type == "Subscriber", user.type := "member"]
+
+# burn trip.id, start & end locations
+trips <- trips[, ':='(trip.id = NULL, start.name = NULL, 
+              start.id = NULL, end.id = NULL, end.name = NULL)]
+```
+
+
+###add columns for minutes, hours, weekday
+```{r}
+trips <- trips[ , minutes := round((seconds / 60))]
+
+trips <- trips[ , hours := round((seconds / 3600))]
+
+trips <- trips[, day := as.numeric(wday(trips$start))]
+trips <- trips[, day := as.character(wday(trips$start))]
+trips <- trips[day == 1, day := "sunday"]
+trips <- trips[day == 2, day := "monday"]
+trips <- trips[day == 3, day := "tuesday"]
+trips <- trips[day == 4, day := "wednesday"]
+trips <- trips[day == 5, day := "thursday"]
+trips <- trips[day == 6, day := "friday"]
+trips <- trips[day == 7, day := "saturday"]
+
+setcolorder(trips, c("user.type", "start", "end", "seconds", "minutes", "hours", "day"))
+
+```
+
+
+###number of rides, per day of week, member/casual
+```{r}
+freq.day.mem <- trips[user.type == "member", list(count = .N), by = day]
+freq.day.mem <- freq.day.mem[, user.type := "member"]
+
+freq.day.cas <- trips[user.type == "casual", list(count = .N), by = day]
+freq.day.cas <- freq.day.cas[, user.type := "casual"]
+
+freq.day.user <- rbind(freq.day.cas, freq.day.mem)
+freq.day.user$day.num <- rep(1:7, 2)
+
+rm(freq.day.cas, freq.day.mem)
+
+```
+
+
+###average duration member/casual
+```{r}
+dmem <- trips[user.type == "member",
+     list(mean = mean(minutes), 
+     median = median(minutes)), 
+     by = day]
+dmem <- dmem[, user.type := "member"]
+dmem$day.num <- rep(1:7)
+
+dcas <- trips[user.type == "casual",
+     list(mean = mean(minutes), 
+     median = median(minutes)), 
+     by = day]
+dcas <- dcas[, user.type := "casual"]
+dcas$day.num <- rep(1:7)
+
+
+#duser <- rbind(dcas, dmem)
+```
+
+
+###plot median
+```{r}
+plot(x = dcas$day.num, y = dcas$median, t = "b", ylim = c(155, 265), col = "red",
+     main = "Median Duration",
+     ylab = "Duration (minutes)",
+     xlab = "Day of Week",
+     xaxt = "n")
+axis(1, at = c(1:7), labels = c("M", "T", "W", "R", "F", "Sa", "Su"))
+points(x = dmem$day.num, y = dmem$median, t = "b", col = "blue")
+legend("left", legend = c("Member", "Casual"), col = c("blue", "red"), lwd = 1, bty = "n")
+```
+
+###plot mean
+```{r}
+plot(x = dcas$day.num, y = dcas$mean, t = "b", ylim = c(155, 265), col = "red",
+     main = "Mean Duration",
+     ylab = "Duration (minutes)",
+     xlab = "Day of Week",
+     xaxt = "n")
+axis(1, at = c(1:7), labels = c("M", "T", "W", "R", "F", "Sa", "Su"))
+points(x = dmem$day.num, y = dmem$mean, t = "b", col = "blue")
+legend("bottomleft", legend = c("Member", "Casual"), col = c("blue", "red"), lwd = 1, bty = "n")
+
+```
+
+
+###plot rides per day
+```{r}
+fcas <- freq.day.user[user.type == "casual", .SD, by = day.num]
+fmem <- freq.day.user[user.type == "member", .SD, by = day.num]
+
+plot(x = fmem$day.num, y = fmem$count, 
+     t = "b", 
+     xlim = c(1, 7),
+     main = "Rides per Day",
+     xlab = "Day of Week", 
+     ylab = "Number of Rides",
+     ylim = c(90000,510000), 
+     col = "blue",
+     xaxt = "n")
+axis(1, at = c(1:7), labels = c("M", "T", "W", "R", "F", "Sa", "Su"))
+points(x = fcas$day.num, y = fcas$count, t = "b", xlim = c(1, 7), col = "red")
+legend("left", legend = c("Member", "Casual"), col = c("blue", "red"), lwd = 1, bty = "n")
+#dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
